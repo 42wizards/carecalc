@@ -22,8 +22,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Pages (switches source to GitHub Actions)
+      - name: Setup Pages
         uses: actions/configure-pages@v5
+
+      - name: Switch Pages source to GitHub Actions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X PUT "repos/${GITHUB_REPOSITORY}/pages" -f build_type=workflow
 
       - name: Assemble site into public/
         run: |
