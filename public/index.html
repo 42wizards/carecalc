@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <title>Care Cost Calculator (with rules)</title>
   <style>
-    body { font-family: Arial, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+    body { font-family: Arial, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; background-color: skyblue; }
     label { display:block; margin-top: 0.5rem; }
     .shift { border: 1px solid #ddd; padding: 0.75rem; margin: 0.5rem 0; border-radius: 6px; }
     .result { background:#f7f7f7; padding:1rem; margin-top:1rem; border-radius:6px; }
@@ -22,20 +22,9 @@
     <li>Durations must be whole 1-hour increments</li>
     <li>Minimum 20 hours per week (sum of provided shifts must be >= 20)</li>
   </ul>
-
   <div id="shifts">
-    <div class="shift">
-      <label>Shift 1 start: <input type="datetime-local" id="s1_start" /></label>
-      <label>Shift 1 end:   <input type="datetime-local" id="s1_end" /></label>
-    </div>
-    <div class="shift">
-      <label>Shift 2 start: <input type="datetime-local" id="s2_start" /></label>
-      <label>Shift 2 end:   <input type="datetime-local" id="s2_end" /></label>
-    </div>
-    <div class="shift">
-      <label>Shift 3 start: <input type="datetime-local" id="s3_start" /></label>
-      <label>Shift 3 end:   <input type="datetime-local" id="s3_end" /></label>
-    </div>
+    <!-- Days-of-week UI: each day starts with one shift (time + duration) and can add more -->
+    <div id="days"></div>
   </div>
 
   <button id="calcBtn">Validate & Calculate Cost</button>
@@ -147,39 +136,91 @@
       const validate = hasModule ? validateShifts : fallback_validateShifts;
       const calculate = hasModule ? calculateCostWithValidation : function(shifts){ const v = fallback_validateShifts(shifts); if (!v.valid) return { valid:false, errors:v.errors, totalHours:v.totalHours }; const res = fallback_calculateCost(shifts); return { valid:true, total:res.total, breakdown:res.breakdown }; };
 
+      // Build days-of-week UI: one shift per day initially, allow adding more per day
+      const days = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+      const daysContainer = document.getElementById('days');
+      function createShiftRow(time, duration) {
+        const row = document.createElement('div');
+        row.className = 'shift';
+        const timeVal = time || '';
+        const durVal = (typeof duration === 'number') ? duration : 4;
+        row.innerHTML = `
+          <label>Start time: <input type="time" class="shift-time" step="900" value="${timeVal}" required /></label>
+          <label>Duration (hours): <input type="number" class="shift-duration" min="4" step="1" value="${durVal}" required /></label>
+          <button type="button" class="remove-shift">Remove</button>
+        `;
+        row.querySelector('.remove-shift').addEventListener('click', () => row.remove());
+        return row;
+      }
+
+      days.forEach((name, idx) => {
+        const block = document.createElement('div');
+        block.className = 'day-block';
+        block.style.border = '1px solid #eee';
+        block.style.padding = '0.5rem';
+        block.style.margin = '0.5rem 0';
+        const title = document.createElement('h3'); title.style.margin = '0 0 0.25rem 0'; title.textContent = name;
+        const shiftsWrap = document.createElement('div'); shiftsWrap.className = 'day-shifts';
+        shiftsWrap.appendChild(createShiftRow());
+        const addBtn = document.createElement('button'); addBtn.type = 'button'; addBtn.textContent = 'Add shift';
+        addBtn.addEventListener('click', () => shiftsWrap.appendChild(createShiftRow()));
+
+        // copy-from-previous button (copies last shift from previous day into this day)
+        const copyPrevBtn = document.createElement('button'); copyPrevBtn.type = 'button'; copyPrevBtn.textContent = 'Copy previous';
+        if (idx === 0) copyPrevBtn.disabled = true;
+        copyPrevBtn.addEventListener('click', () => {
+          const dayBlocks = document.querySelectorAll('.day-block');
+          if (idx === 0) return;
+          const prevBlock = dayBlocks[idx - 1];
+          if (!prevBlock) return;
+          const prevShiftsWrap = prevBlock.querySelector('.day-shifts');
+          const lastShift = prevShiftsWrap.querySelector('.shift:last-child');
+          if (!lastShift) return;
+          const time = lastShift.querySelector('.shift-time').value;
+          const dur = parseInt(lastShift.querySelector('.shift-duration').value, 10);
+          shiftsWrap.appendChild(createShiftRow(time, isNaN(dur) ? 4 : dur));
+        });
+
+        block.appendChild(title); block.appendChild(shiftsWrap); block.appendChild(addBtn); block.appendChild(copyPrevBtn);
+        daysContainer.appendChild(block);
+      });
+
+      function getWeekMonday(date) {
+        const d = new Date(date);
+        const day = d.getDay();
+        const diff = (day === 0 ? -6 : 1) - day;
+        return new Date(d.getFullYear(), d.getMonth(), d.getDate() + diff, 0, 0, 0, 0);
+      }
+
       document.getElementById('calcBtn').addEventListener('click', () => {
-        const fields = [
-          {s: 's1_start', e: 's1_end'},
-          {s: 's2_start', e: 's2_end'},
-          {s: 's3_start', e: 's3_end'}
-        ];
+        const weekStart = getWeekMonday(new Date());
         const shifts = [];
-        for (const f of fields) {
-          const sVal = document.getElementById(f.s).value;
-          const eVal = document.getElementById(f.e).value;
-          if (sVal && eVal) shifts.push({ start: sVal, end: eVal });
-        }
+        document.querySelectorAll('.day-block').forEach((block, dayIdx) => {
+          block.querySelectorAll('.shift').forEach(r => {
+            const time = r.querySelector('.shift-time').value;
+            const dur = parseInt(r.querySelector('.shift-duration').value, 10);
+            if (!time || isNaN(dur)) return;
+            const [hh, mm] = time.split(':').map(Number);
+            const start = new Date(weekStart.getFullYear(), weekStart.getMonth(), weekStart.getDate() + dayIdx, hh, mm, 0, 0);
+            const end = new Date(start); end.setHours(end.getHours() + dur);
+            shifts.push({ start: start.toISOString(), end: end.toISOString() });
+          });
+        });
 
         const validation = validate(shifts);
         const errBox = document.getElementById('errors');
         const resBox = document.getElementById('result');
-        errBox.style.display = 'none';
-        resBox.style.display = 'none';
-        errBox.innerHTML = '';
-        resBox.innerHTML = '';
-
+        errBox.style.display = 'none'; resBox.style.display = 'none'; errBox.innerHTML = ''; resBox.innerHTML = '';
         if (!validation.valid) {
-          errBox.style.display = 'block';
-          errBox.innerHTML = '<strong>Validation errors:</strong><ul>' + validation.errors.map(e => '<li>' + e + '</li>').join('') + '</ul>';
-          return;
+          errBox.style.display = 'block'; errBox.innerHTML = '<strong>Validation errors:</strong><ul>' + validation.errors.map(e => '<li>' + e + '</li>').join('') + '</ul>'; return;
         }
 
         const res = calculate(shifts);
         resBox.style.display = 'block';
-        let html = '<h3>Total: $' + res.total.toFixed(2) + '</h3>';
+        let html = '<h3>Total: $' + (res.total ? res.total.toFixed(2) : '0.00') + '</h3>';
         html += '<table><thead><tr><th>Start</th><th>End</th><th>Hours</th><th>Rate</th><th>Amount</th></tr></thead><tbody>';
-        for (const b of res.breakdown) {
-          html += '<tr><td>' + new Date(b.start).toLocaleString() + '</td><td>' + new Date(b.end).toLocaleString() + '</td><td>' + b.hours + '</td><td>$' + b.rate.toFixed(2) + '</td><td>$' + b.amount.toFixed(2) + '</td></tr>';
+        for (const b of (res.breakdown || [])) {
+          html += '<tr><td>' + new Date(b.start).toLocaleString() + '</td><td>' + new Date(b.end).toLocaleString() + '</td><td>' + b.hours + '</td><td>$' + (b.rate?b.rate.toFixed(2):'') + '</td><td>$' + (b.amount?b.amount.toFixed(2):'') + '</td></tr>';
         }
         html += '</tbody></table>';
         resBox.innerHTML = html;
