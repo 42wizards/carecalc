@@ -11,6 +11,10 @@ permissions:
   pages: write
   id-token: write
 
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -18,24 +22,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Ensure public/.nojekyll (skip Jekyll processing)
+      - name: Assemble site into public/
         run: |
-          if [ -d public ]; then
-            touch public/.nojekyll
-          else
+          if [ ! -d public ]; then
             echo "public directory not found" && exit 1
           fi
+          # skip Jekyll processing
+          touch public/.nojekyll
+          # the page loads src/calculateCost.js, so include it in the deployed site
+          cp -r src public/src
 
       # If you have a build step (npm, hugo, etc.), add it here and ensure output goes to ./public
 
       - name: Upload artifact for GitHub Pages
-        uses: actions/upload-pages-artifact@v1
+        uses: actions/upload-pages-artifact@v3
         with:
           path: ./public
 
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v1
+        id: deployment
+        uses: actions/deploy-pages@v4
