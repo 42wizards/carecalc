@@ -1,0 +1,190 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Care Cost Calculator (with rules)</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; }
+    label { display:block; margin-top: 0.5rem; }
+    .shift { border: 1px solid #ddd; padding: 0.75rem; margin: 0.5rem 0; border-radius: 6px; }
+    .result { background:#f7f7f7; padding:1rem; margin-top:1rem; border-radius:6px; }
+    .errors { background:#ffefef; border:1px solid #f5c2c2; padding:0.75rem; border-radius:6px; color:#800; margin-top:0.5rem; }
+    table { border-collapse: collapse; width:100%; }
+    th, td { padding: 6px 8px; border-bottom: 1px solid #eee; text-align:left; }
+  </style>
+</head>
+<body>
+  <h1>In-Home Care Cost Calculator</h1>
+  <p>Rules enforced: base $37/hr, +$4 overnight (22:00-06:00), +$4 weekend (Sat/Sun). Differentials stack. Additional rules:</p>
+  <ul>
+    <li>Each shift must be at least 4 hours</li>
+    <li>Start times must be on quarter-hour (00, 15, 30, 45)</li>
+    <li>Durations must be whole 1-hour increments</li>
+    <li>Minimum 20 hours per week (sum of provided shifts must be >= 20)</li>
+  </ul>
+
+  <div id="shifts">
+    <div class="shift">
+      <label>Shift 1 start: <input type="datetime-local" id="s1_start" /></label>
+      <label>Shift 1 end:   <input type="datetime-local" id="s1_end" /></label>
+    </div>
+    <div class="shift">
+      <label>Shift 2 start: <input type="datetime-local" id="s2_start" /></label>
+      <label>Shift 2 end:   <input type="datetime-local" id="s2_end" /></label>
+    </div>
+    <div class="shift">
+      <label>Shift 3 start: <input type="datetime-local" id="s3_start" /></label>
+      <label>Shift 3 end:   <input type="datetime-local" id="s3_end" /></label>
+    </div>
+  </div>
+
+  <button id="calcBtn">Validate & Calculate Cost</button>
+
+  <div id="errors" class="errors" style="display:none"></div>
+  <div id="result" class="result" style="display:none"></div>
+
+  <script src="/src/calculateCost.js"></script>
+  <script>
+    // Browser glue: use calculateCostWithValidation from src/calculateCost.js if available,
+    // else fall back to inline copy (for environments that don't support modules)
+    (function () {
+      // safe references
+      const hasModule = typeof calculateCostWithValidation === 'function' && typeof validateShifts === 'function';
+
+      function parseDate(input) { return new Date(input); }
+      function clampRange(a,b,x,y){ const start = new Date(Math.max(a.getTime(), x.getTime())); const end = new Date(Math.min(b.getTime(), y.getTime())); if (end <= start) return null; return { start, end }; }
+      function hoursBetween(a,b){ return (b.getTime()-a.getTime())/3600000; }
+      function isWeekend(date){ const d = date.getDay(); return d===0||d===6; }
+      function startOfDay(date){ return new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0,0,0,0); }
+      function addDays(date,n){ return new Date(date.getFullYear(), date.getMonth(), date.getDate()+n, date.getHours(), date.getMinutes(), date.getSeconds()); }
+
+      // Fallback implementations (same as src/calculateCost.js) if library wasn't loaded
+      function fallback_validateShifts(shifts) {
+        const errors = [];
+        let totalHours = 0;
+        if (!Array.isArray(shifts) || shifts.length === 0) {
+          errors.push('At least one shift is required.');
+          return { valid: false, errors, totalHours: 0 };
+        }
+        for (let i=0;i<shifts.length;i++){
+          const s = shifts[i];
+          const start = parseDate(s.start), end = parseDate(s.end);
+          if (!(start instanceof Date) || isNaN(start) || !(end instanceof Date) || isNaN(end)) {
+            errors.push(`Shift ${i+1}: invalid start or end datetime.`);
+            continue;
+          }
+          if (end <= start) {
+            errors.push(`Shift ${i+1}: end must be after start.`);
+            continue;
+          }
+          const mins = start.getMinutes();
+          if (![0,15,30,45].includes(mins)) {
+            errors.push(`Shift ${i+1}: start minute must be 00, 15, 30, or 45.`);
+          }
+          const ms = end.getTime() - start.getTime();
+          const hrs = ms/3600000;
+          const EPS = 1e-9;
+          if (Math.abs(hrs - Math.round(hrs)) > EPS) {
+            errors.push(`Shift ${i+1}: duration must be a whole number of hours (currently ${hrs.toFixed(2)}).`);
+          }
+          if (hrs < 4 - EPS) {
+            errors.push(`Shift ${i+1}: minimum shift length is 4 hours (currently ${hrs.toFixed(2)}).`);
+          }
+          totalHours += hrs;
+        }
+        if (totalHours < 20 - 1e-9) {
+          errors.push(`Total hours across provided shifts = ${Math.round(totalHours*100)/100}. Minimum required per week is 20 hours.`);
+        }
+        return { valid: errors.length === 0, errors, totalHours };
+      }
+
+      function fallback_calculateCost(shifts) {
+        const base = 37.0, odiff = 4.0, wdiff = 4.0;
+        const breakdown = []; let total=0;
+        for (const s of shifts) {
+          const start = parseDate(s.start), end = parseDate(s.end);
+          let dayCursor = startOfDay(start), endDay = startOfDay(end);
+          while (dayCursor <= endDay) {
+            const dayStart = dayCursor, nextDay = addDays(dayCursor,1);
+            const dayOverlap = clampRange(start,end,dayStart,nextDay);
+            if (dayOverlap) {
+              const dWinStart = new Date(dayStart.getFullYear(),dayStart.getMonth(),dayStart.getDate(),6,0,0,0);
+              const dWinEnd   = new Date(dayStart.getFullYear(),dayStart.getMonth(),dayStart.getDate(),22,0,0,0);
+              const daySeg = clampRange(dayOverlap.start,dayOverlap.end,dWinStart,dWinEnd);
+              if (daySeg) {
+                const hrs = hoursBetween(daySeg.start,daySeg.end);
+                const isW = isWeekend(daySeg.start);
+                const rate = base + (isW?wdiff:0);
+                const amount = hrs*rate;
+                breakdown.push({start:daySeg.start.toISOString(), end:daySeg.end.toISOString(), hours:hrs, rate, amount, base, overnightDiff:0, weekendDiff:isW?wdiff:0});
+                total += amount;
+              }
+              const od1 = clampRange(dayOverlap.start,dayOverlap.end,dayStart,dWinStart);
+              if (od1) {
+                const hrs = hoursBetween(od1.start,od1.end);
+                const isW = isWeekend(od1.start);
+                const rate = base + odiff + (isW?wdiff:0);
+                const amount = hrs*rate;
+                breakdown.push({start:od1.start.toISOString(), end:od1.end.toISOString(), hours:hrs, rate, amount, base, overnightDiff:odiff, weekendDiff:isW?wdiff:0});
+                total += amount;
+              }
+              const od2 = clampRange(dayOverlap.start,dayOverlap.end,dWinEnd,nextDay);
+              if (od2) {
+                const hrs = hoursBetween(od2.start,od2.end);
+                const isW = isWeekend(od2.start);
+                const rate = base + odiff + (isW?wdiff:0);
+                const amount = hrs*rate;
+                breakdown.push({start:od2.start.toISOString(), end:od2.end.toISOString(), hours:hrs, rate, amount, base, overnightDiff:odiff, weekendDiff:isW?wdiff:0});
+                total += amount;
+              }
+            }
+            dayCursor = nextDay;
+          }
+        }
+        return { total: Math.round(total*100)/100, breakdown: breakdown.map(b => ({...b, hours:Math.round(b.hours*100)/100, amount:Math.round(b.amount*100)/100, rate:Math.round(b.rate*100)/100})) };
+      }
+
+      const validate = hasModule ? validateShifts : fallback_validateShifts;
+      const calculate = hasModule ? calculateCostWithValidation : function(shifts){ const v = fallback_validateShifts(shifts); if (!v.valid) return { valid:false, errors:v.errors, totalHours:v.totalHours }; const res = fallback_calculateCost(shifts); return { valid:true, total:res.total, breakdown:res.breakdown }; };
+
+      document.getElementById('calcBtn').addEventListener('click', () => {
+        const fields = [
+          {s: 's1_start', e: 's1_end'},
+          {s: 's2_start', e: 's2_end'},
+          {s: 's3_start', e: 's3_end'}
+        ];
+        const shifts = [];
+        for (const f of fields) {
+          const sVal = document.getElementById(f.s).value;
+          const eVal = document.getElementById(f.e).value;
+          if (sVal && eVal) shifts.push({ start: sVal, end: eVal });
+        }
+
+        const validation = validate(shifts);
+        const errBox = document.getElementById('errors');
+        const resBox = document.getElementById('result');
+        errBox.style.display = 'none';
+        resBox.style.display = 'none';
+        errBox.innerHTML = '';
+        resBox.innerHTML = '';
+
+        if (!validation.valid) {
+          errBox.style.display = 'block';
+          errBox.innerHTML = '<strong>Validation errors:</strong><ul>' + validation.errors.map(e => '<li>' + e + '</li>').join('') + '</ul>';
+          return;
+        }
+
+        const res = calculate(shifts);
+        resBox.style.display = 'block';
+        let html = '<h3>Total: $' + res.total.toFixed(2) + '</h3>';
+        html += '<table><thead><tr><th>Start</th><th>End</th><th>Hours</th><th>Rate</th><th>Amount</th></tr></thead><tbody>';
+        for (const b of res.breakdown) {
+          html += '<tr><td>' + new Date(b.start).toLocaleString() + '</td><td>' + new Date(b.end).toLocaleString() + '</td><td>' + b.hours + '</td><td>$' + b.rate.toFixed(2) + '</td><td>$' + b.amount.toFixed(2) + '</td></tr>';
+        }
+        html += '</tbody></table>';
+        resBox.innerHTML = html;
+      });
+    })();
+  </script>
+</body>
+</html>
