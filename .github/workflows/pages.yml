@@ -25,27 +25,19 @@ jobs:
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
-      - name: Switch Pages source to GitHub Actions
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api -X PUT "repos/${GITHUB_REPOSITORY}/pages" -f build_type=workflow
-
-      - name: Assemble site into public/
+      - name: Assemble site
         run: |
-          if [ ! -d public ]; then
-            echo "public directory not found" && exit 1
-          fi
-          # skip Jekyll processing
-          touch public/.nojekyll
-          # the page loads src/calculateCost.js, so include it in the deployed site
-          cp -r src public/src
+          mkdir -p _site
+          cp index.html _site/
+          cp -r src _site/src
+          touch _site/.nojekyll
 
-      # If you have a build step (npm, hugo, etc.), add it here and ensure output goes to ./public
+      # If you add a build step later (npm, hugo, etc.), output to ./_site
 
       - name: Upload artifact for GitHub Pages
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./public
+          path: ./_site
 
   deploy:
     needs: build
